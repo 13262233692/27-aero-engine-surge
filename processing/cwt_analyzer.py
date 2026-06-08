@@ -1,6 +1,6 @@
+import gc
 import numpy as np
-from scipy.signal import morlet2, cwt as scipy_cwt
-from scipy.fft import fftfreq
+from scipy.signal import morlet2
 
 
 class CWTAnalyzer:
@@ -45,12 +45,17 @@ class CWTAnalyzer:
         for i, s in enumerate(self._scales):
             wavelet = morlet2(n, s, w=self._width)
             cwt_matrix[i, :] = np.convolve(data, wavelet, mode='same')
+            del wavelet
 
         power = np.abs(cwt_matrix) ** 2
+        del cwt_matrix
 
         power_log = 10 * np.log10(power + 1e-12)
+        del power
 
-        power_log = np.clip(power_log, np.percentile(power_log, 1), np.percentile(power_log, 99))
+        p1 = np.percentile(power_log, 1)
+        p99 = np.percentile(power_log, 99)
+        np.clip(power_log, p1, p99, out=power_log)
 
         return power_log, self._freqs, self._scales
 
@@ -61,9 +66,9 @@ class CWTAnalyzer:
 
         n = len(data)
         duration = n / self._sample_rate
-        times = np.linspace(time_offset, time_offset + duration, n)
+        times = np.linspace(time_offset, time_offset + duration, power_log.shape[1])
 
-        return {
+        result = {
             "power": power_log,
             "freqs": freqs,
             "times": times,
@@ -71,6 +76,9 @@ class CWTAnalyzer:
             "freq_max": self._freq_max,
             "duration": duration,
         }
+
+        del scales
+        return result
 
     def downsample_heatmap(self, heatmap_data: dict, target_time_bins: int = 256, target_freq_bins: int = 64):
         if heatmap_data is None:
@@ -86,9 +94,13 @@ class CWTAnalyzer:
         t_step = max(1, n_time // target_time_bins)
         f_step = max(1, n_freq // target_freq_bins)
 
-        power_ds = power[::f_step, ::t_step]
-        freqs_ds = freqs[::f_step]
-        times_ds = times[::t_step]
+        power_ds = np.ascontiguousarray(power[::f_step, ::t_step])
+        freqs_ds = np.ascontiguousarray(freqs[::f_step])
+        times_ds = np.ascontiguousarray(times[::t_step])
+
+        del heatmap_data["power"]
+        del heatmap_data["freqs"]
+        del heatmap_data["times"]
 
         return {
             "power": power_ds,

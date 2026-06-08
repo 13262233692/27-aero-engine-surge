@@ -1,3 +1,4 @@
+import gc
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
@@ -213,14 +214,26 @@ def update_dashboard(n):
 
     n_sub = min(len(data), 2000)
     step = max(1, len(data) // n_sub)
-    data_sub = data[::step]
+    data_sub = data[::step].copy()
 
-    heatmap_data = cwt_analyzer.compute_heatmap_data(data_sub, time_offset=ts[0] if len(ts) > 0 else 0.0)
+    del data
+    del ts
+
+    heatmap_data = cwt_analyzer.compute_heatmap_data(data_sub, time_offset=0.0)
+    del data_sub
+
     if heatmap_data:
-        heatmap_data = cwt_analyzer.downsample_heatmap(heatmap_data, target_time_bins=CWT_TIME_BINS, target_freq_bins=CWT_FREQ_BINS)
+        heatmap_data = cwt_analyzer.downsample_heatmap(
+            heatmap_data,
+            target_time_bins=CWT_TIME_BINS,
+            target_freq_bins=CWT_FREQ_BINS,
+        )
 
     fig_heatmap = _build_heatmap(heatmap_data)
     fig_band = _build_band_energy(heatmap_data)
+
+    if heatmap_data is not None:
+        del heatmap_data
 
     util_pct = ring_buffer.utilization
     status_val = "SURGE WARN" if _latest_stats.get("surge_intensity", 0) > 0.3 else "NORMAL"
@@ -229,10 +242,7 @@ def update_dashboard(n):
     _latest_stats["total"] = ring_buffer.total_written
     _latest_stats["latest_ts"] = ring_buffer.latest_timestamp
 
-    if len(data) > 0 and len(ts) > 0:
-        elapsed = ts[-1]
-        if elapsed > simulator.surge_onset_time:
-            _latest_stats["surge_intensity"] = min(1.0, (elapsed - simulator.surge_onset_time) * 0.05)
+    gc.collect()
 
     return fig_waveform, fig_heatmap, fig_band, ["缓冲区", f"{util_pct}%"], ["状态", status_val]
 
@@ -242,18 +252,21 @@ def _build_waveform(data, ts):
 
     n_display = min(len(data), 5000)
     step = max(1, len(data) // n_display)
-    d = data[::step]
-    t = ts[::step] if len(ts) == len(data) else np.arange(len(d)) / SAMPLE_RATE
+    d = data[::step].copy()
+    t = ts[::step].copy() if len(ts) == len(data) else np.arange(len(d), dtype=np.float64) / SAMPLE_RATE
 
     fig.add_trace(
         go.Scattergl(
-            x=t,
-            y=d,
+            x=t.tolist(),
+            y=d.tolist(),
             mode="lines",
             line=dict(color="#58a6ff", width=1),
             name="P1",
         )
     )
+
+    del d
+    del t
 
     fig.update_layout(
         paper_bgcolor="#0d1117",
@@ -292,11 +305,19 @@ def _build_heatmap(heatmap_data):
     freqs = heatmap_data["freqs"]
     times = heatmap_data["times"]
 
+    z_data = power.tolist()
+    x_data = times.tolist()
+    y_data = freqs.tolist()
+
+    del power
+    del freqs
+    del times
+
     fig.add_trace(
         go.Heatmap(
-            z=power,
-            x=times,
-            y=freqs,
+            z=z_data,
+            x=x_data,
+            y=y_data,
             colorscale=[
                 [0.0, "#000033"],
                 [0.15, "#000080"],
@@ -317,6 +338,10 @@ def _build_heatmap(heatmap_data):
             hovertemplate="Freq: %{y:.0f} Hz<br>Time: %{x:.3f} s<br>Power: %{z:.1f} dB<extra></extra>",
         )
     )
+
+    del z_data
+    del x_data
+    del y_data
 
     fig.update_layout(
         paper_bgcolor="#0d1117",
@@ -363,21 +388,34 @@ def _build_band_energy(heatmap_data):
         ("30-45 kHz", 30000, 45000, "#3fb950"),
     ]
 
+    band_values = []
     for label, f_lo, f_hi, color in band_defs:
         mask = (freqs >= f_lo) & (freqs < f_hi)
         if np.any(mask):
             band_power = np.mean(power[mask, :], axis=0)
-            mean_db = np.mean(band_power)
-            fig.add_trace(
-                go.Bar(
-                    name=label,
-                    x=[label],
-                    y=[mean_db],
-                    marker_color=color,
-                    marker_line_width=0,
-                    width=0.6,
-                )
+            mean_db = float(np.mean(band_power))
+            del band_power
+            del mask
+        else:
+            mean_db = 0.0
+        band_values.append((label, mean_db, color))
+
+    del power
+    del freqs
+
+    for label, mean_db, color in band_values:
+        fig.add_trace(
+            go.Bar(
+                name=label,
+                x=[label],
+                y=[mean_db],
+                marker_color=color,
+                marker_line_width=0,
+                width=0.6,
             )
+        )
+
+    del band_values
 
     fig.update_layout(
         paper_bgcolor="#0d1117",
