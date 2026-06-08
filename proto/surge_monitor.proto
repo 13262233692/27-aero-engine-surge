@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package surge_monitor;
+
+service PressureSensorService {
+    rpc StreamPressureData (stream PressureDataBatch) returns (StreamAck);
+    rpc GetStatus (StatusRequest) returns (SystemStatus);
+}
+
+message PressureDataBatch {
+    uint32 sensor_id = 1;
+    double timestamp_base = 2;
+    uint32 sample_rate_hz = 3;
+    repeated float samples = 4 [packed = true];
+}
+
+message StreamAck {
+    bool accepted = 1;
+    uint32 received_count = 2;
+    string message = 3;
+}
+
+message StatusRequest {}
+
+message SystemStatus {
+    bool healthy = 1;
+    uint32 buffer_utilization_pct = 2;
+    double latest_timestamp = 3;
+    uint32 total_samples_received = 4;
+}
