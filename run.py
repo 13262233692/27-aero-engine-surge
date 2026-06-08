@@ -25,7 +25,7 @@ def main():
     print("  启动中...")
     print()
 
-    run_dashboard(host="0.0.0.0", port=8050, with_simulator=True)
+    run_dashboard(host="0.0.0.0", port=8051, with_simulator=True)
 
 
 if __name__ == "__main__":

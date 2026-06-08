@@ -21,6 +21,10 @@ class PressureSimulator:
         self._surge_intensity = 0.0
         self._running = False
         self._elapsed = 0.0
+        self._W_steady = 25.0
+        self._PR_steady = 12.5
+        self._current_W = self._W_steady
+        self._current_PR = self._PR_steady
 
     def generate_batch(self, duration: float = 0.01):
         n_samples = int(duration * self._sample_rate)
@@ -65,20 +69,57 @@ class PressureSimulator:
             signal[combined_mask] += 8.0 * self._surge_intensity * np.random.randn(np.sum(combined_mask)).astype(np.float32)
 
         timestamps = t.copy()
+
+        W, PR = self._generate_compressor_state(duration)
+
         self._elapsed += duration
 
-        return signal, timestamps
+        return signal, timestamps, W, PR
+
+    def _generate_compressor_state(self, duration: float):
+        elapsed = self._elapsed + duration
+        noise_W = np.random.randn() * 0.15
+        noise_PR = np.random.randn() * 0.08
+
+        if elapsed < self._surge_onset_time:
+            ramp_W = -0.05 * elapsed
+            ramp_PR = 0.03 * elapsed
+            self._current_W = self._W_steady + ramp_W + noise_W
+            self._current_PR = self._PR_steady + ramp_PR + noise_PR
+        else:
+            surge_t = elapsed - self._surge_onset_time
+            drift_rate = min(1.0, surge_t * 0.04)
+
+            self._current_W = (
+                self._W_steady
+                - 0.05 * self._surge_onset_time
+                - drift_rate * 8.0
+                + 0.5 * np.sin(2 * np.pi * 0.8 * surge_t) * drift_rate
+                + noise_W * (1.0 + drift_rate * 3.0)
+            )
+
+            self._current_PR = (
+                self._PR_steady
+                + 0.03 * self._surge_onset_time
+                + drift_rate * 2.5
+                + 0.3 * np.sin(2 * np.pi * 1.2 * surge_t) * drift_rate
+                + noise_PR * (1.0 + drift_rate * 2.0)
+            )
+
+        return self._current_W, self._current_PR
 
     def generate_continuous(self, batch_duration: float = 0.01, callback=None):
         self._running = True
         self._elapsed = 0.0
         self._surge_intensity = 0.0
+        self._current_W = self._W_steady
+        self._current_PR = self._PR_steady
 
         try:
             while self._running:
-                data, ts = self.generate_batch(batch_duration)
+                data, ts, W, PR = self.generate_batch(batch_duration)
                 if callback:
-                    callback(data, ts)
+                    callback(data, ts, W, PR)
                 sleep_time = batch_duration * 0.8
                 time.sleep(sleep_time)
         except KeyboardInterrupt:
@@ -98,3 +139,7 @@ class PressureSimulator:
     @property
     def surge_onset_time(self):
         return self._surge_onset_time
+
+    @property
+    def current_compressor_state(self):
+        return self._current_W, self._current_PR
